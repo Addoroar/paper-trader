@@ -62,13 +62,13 @@ class SyntheticFeed(DataFeed):
         annual_vol = (0.55 if is_crypto(symbol) else 0.28) * (0.8 + 0.4 * sym_rng.random())
         period = (20 + 60 * sym_rng.random()) * 86400  # trend regime length in seconds
         phase = sym_rng.random() * 2 * np.pi
-        bias = (sym_rng.random() - 0.4) * 0.25  # annual drift
+        bias = (sym_rng.random() - 0.35) * 0.3  # annual drift
         dt = tf / YEAR
         sigma = annual_vol * np.sqrt(dt)
         z, w, v = stream("returns"), stream("wicks"), stream("volume")
         regime = np.sin(2 * np.pi * (ts - EPOCH) / period + phase)
         drift = (bias + 0.9 * annual_vol * regime) * dt
-        r = drift - 0.5 * sigma**2 + sigma * z
+        r = drift + sigma * z  # no volatility drag: median path follows the drift
         base = _BASE_PRICES.get(symbol, 20 + _seed(symbol) % 480)
         close = base * np.exp(np.cumsum(r))
         open_ = np.concatenate([[base], close[:-1]])

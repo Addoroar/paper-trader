@@ -377,7 +377,7 @@ class Engine:
         reasons = {}
         for s in res.ranked:
             if s.selected:
-                reasons[s.symbol] = f"Selected {s.symbol} ({res.method} rank #{s.rank}, {s.detail})"
+                reasons[s.symbol] = f"Selected {s.symbol} ({_method_label(res.method)} #{s.rank}, {s.detail})"
         with self.db.tx():
             self._store_selection(name, step, now, "primary", res)
             if shadow:
@@ -534,6 +534,12 @@ class Engine:
                      ts=end - 1, day=prev, accounts=data, notable={r["type"]: r["n"] for r in notable},
                      dedupe_key=f"summary:{prev}")
             self.db.set_meta("summary_day", day)
+
+
+def _method_label(method: str) -> str:
+    """'momentum_rank' -> 'momentum rank', 'volatility_adjusted' -> 'volatility adjusted rank'."""
+    label = method.replace("_", " ")
+    return label if label.endswith("rank") else f"{label} rank"
 
 
 def _pid() -> int:

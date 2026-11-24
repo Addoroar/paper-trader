@@ -1,0 +1,6 @@
+"""Entry point for ``python -m papertrader``."""
+
+from papertrader.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

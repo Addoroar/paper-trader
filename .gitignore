@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+state/
+logs/
+reports/
+cache/
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+*.lock
+.env

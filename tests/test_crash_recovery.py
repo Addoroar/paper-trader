@@ -199,3 +199,23 @@ def test_single_instance_lock(tmp_path):
             InstanceLock(p).acquire()
     assert not InstanceLock(p).is_locked()
     InstanceLock(p).acquire().release()
+
+
+def test_stale_latest_bar_is_never_traded(tmp_path):
+    """A bar that closed long before 'now' (e.g. market closed at startup) is not traded on."""
+    d = small_config(tmp_path).model_dump()
+    d["universe"] = {"stocks": ["SPY"], "crypto": [], "exclude": []}
+    d["selection"].update({"lookback_bars": 5, "top_n": 1, "min_avg_volume": 0})
+    d["accounts"] = [{"name": "bh", "strategy": "buy_and_hold", "params": {}, "allocation": 1000}]
+    from papertrader.config import parse_config
+
+    cfg = parse_config(d)
+    hist = HistoricalFeed(SyntheticFeed(), "1h")
+    db = Database(tmp_path / "s.db")
+    saturday = parse_date("2025-01-04T15:00:00")  # NYSE closed; last bar closed Friday 16:00 ET
+    eng = Engine(cfg, db, hist, clock=SimClock(saturday))
+    hist.preload(["SPY"], saturday - 86400 * 5, saturday, 80)
+    eng.startup()
+    eng.tick()
+    assert db.scalar("SELECT count(*) FROM orders") == 0
+    assert db.scalar("SELECT count(*) FROM cursors") == 1  # bar acknowledged, not traded

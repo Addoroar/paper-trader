@@ -1,0 +1,21 @@
+# docker compose up -d        -> bot (auto-restarts) + dashboard on http://localhost:8501
+services:
+  bot:
+    build: .
+    restart: unless-stopped        # comes back after crashes and reboots
+    stop_signal: SIGTERM
+    stop_grace_period: 2m          # let the current tick finish
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+  dashboard:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "papertrader", "dashboard", "--config", "/app/config.yaml", "--port", "8501"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./state:/app/state

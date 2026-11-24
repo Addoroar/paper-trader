@@ -72,3 +72,11 @@ def test_missing_file_and_yaml_error(tmp_path):
     p.write_text("starting_cash: [1, 2\n")
     with pytest.raises(ConfigError, match="YAML syntax error"):
         load_config(p)
+
+
+def test_config_example_file_matches_init_template():
+    from pathlib import Path
+
+    from papertrader.config import EXAMPLE_CONFIG
+
+    assert (Path(__file__).parent.parent / "config.example.yaml").read_text() == EXAMPLE_CONFIG

@@ -36,6 +36,7 @@ from papertrader import logging_setup as ev
 from papertrader.broker.paper import PaperBroker, round_qty
 from papertrader.config import Config
 from papertrader.data.base import DataFeed
+from papertrader.data.market_hours import bar_close_times
 from papertrader.engine.clock import WallClock
 from papertrader.logging_setup import EventLogger
 from papertrader.models import Action, OrderStatus, Position, Side, TickContext
@@ -273,11 +274,22 @@ class Engine:
         if not new_bars:
             return 0
 
-        # 1) gap replay: missed bars are only used for stop/take-profit checks
-        self._replay_gap(acct, new_bars)
+        # A newest bar is only traded if it is fresh (closed within one bar + two polls of now).
+        # Otherwise (market closed, data delayed, bot was down) it is treated like a missed bar.
+        tf = self.cfg.timeframe_seconds
+        stale_after = tf + 2 * self.cfg.poll_interval_seconds
+        latest: dict[str, int] = {}
+        for sym, df in new_bars.items():
+            last_ts = int(df.index[-1])
+            if now - int(bar_close_times(sym, [last_ts], tf)[0]) <= stale_after:
+                latest[sym] = last_ts
 
-        # 2) decision round on the newest bar of each symbol
-        latest = {sym: int(df.index[-1]) for sym, df in new_bars.items()}
+        # 1) gap replay: missed/stale bars are only used for stop/take-profit checks
+        self._replay_gap(acct, new_bars, latest, now)
+        if not latest:
+            return 0
+
+        # 2) decision round on the newest (fresh) bar of each symbol
         step = repo.get_step(self.db, name)
         selection, sel_reasons = self._selection(acct, step, now)
         halted = self._daily_check(acct, now)
@@ -329,12 +341,14 @@ class Engine:
                 self.broker.fill_order(r["order_id"], self.clock())
         return rows
 
-    def _replay_gap(self, acct: AccountRuntime, new_bars: dict[str, pd.DataFrame]) -> None:
+    def _replay_gap(self, acct: AccountRuntime, new_bars: dict[str, pd.DataFrame], fresh: dict[str, int],
+                    now: int) -> None:
+        """Process bars that will not be traded on: stop/take-profit checks only, then advance the cursor."""
         name = acct.name
         for sym, df in new_bars.items():
-            if len(df) <= 1:
+            missed = df.iloc[:-1] if sym in fresh else df
+            if missed.empty:
                 continue
-            missed = df.iloc[:-1]
             outcome = "no stop/take-profit triggered"
             for ts, bar in missed.iterrows():
                 ts = int(ts)
@@ -342,16 +356,26 @@ class Engine:
                 if pos is not None and ts > pos.last_bar_ts and not self._existing_orders(name, sym, ts):
                     ex = acct.risk.check_exit(pos, float(bar["open"]), float(bar["high"]), float(bar["low"]))
                     if ex:
-                        self._risk_exit(acct, pos, ts, ex, self.clock(), gap=True)
+                        self._risk_exit(acct, pos, ts, ex, now, gap=True)
                         outcome = f"{ex.kind} executed on missed bar {fmt_ts(ts)} at {ex.price:.4f}"
                 with self.db.tx():
                     repo.set_cursor(self.db, name, sym, ts)
-            held_note = "" if repo.get_position(self.db, name, sym) or "executed" in outcome else " (not held)"
+            held = repo.get_position(self.db, name, sym) is not None or "executed" in outcome
+            first, last = int(missed.index[0]), int(missed.index[-1])
+            age_min = (now - int(bar_close_times(sym, [last], self.cfg.timeframe_seconds)[0])) / 60
+            if sym in fresh:
+                what = f"caught up {len(missed)} missed bar(s) {fmt_ts(first)} .. {fmt_ts(last)}"
+            else:
+                what = (f"{len(missed)} new bar(s) up to {fmt_ts(last)} closed {age_min:.0f} min ago "
+                        "(market closed, data delayed or bot was down); stale")
+            if not held and sym not in fresh and len(missed) == 1:
+                level = "DEBUG"  # routine: e.g. first sight of a stock outside market hours
+            else:
+                level = "INFO"
             self.log(ev.GAP_REPLAY,
-                     f"caught up {len(missed)} missed bar(s) {fmt_ts(int(missed.index[0]))} .. "
-                     f"{fmt_ts(int(missed.index[-1]))}{held_note}: {outcome}; no new entries on stale bars",
-                     account=name, symbol=sym, bars=len(missed),
-                     dedupe_key=f"gap:{name}:{sym}:{int(missed.index[0])}:{int(missed.index[-1])}")
+                     f"{what}{'' if held else ' (not held)'}: {outcome}; no new entries on stale bars",
+                     level=level, account=name, symbol=sym, bars=len(missed),
+                     dedupe_key=f"gap:{name}:{sym}:{first}:{last}")
 
     def _risk_exit(self, acct: AccountRuntime, pos: Position, bar_ts: int, ex, now: int, gap: bool = False) -> None:
         name, sym = acct.name, pos.symbol
